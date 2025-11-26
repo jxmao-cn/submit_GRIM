@@ -73,8 +73,6 @@ for key, value in vars(args).items():
     print(f"{key:20}: {value}")
 print("=" * 30)
 
-# -- Helper functions kept as simple utilities --
-
 def normalize_adj(adj):  
     '''this function is used to normalize the adjacency matrix'''
     adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(adj.T > adj) 
@@ -86,7 +84,6 @@ def normalize_adj(adj):
     adj=mx.dot(r_mat_inv_sqrt).transpose().dot(r_mat_inv_sqrt)
     return torch.Tensor(adj.toarray()).to_sparse()
 
-# -- Load graph and align to baseline order --
 #graph_path = f'data/{args.dataset}_mean_{args.diffusion_model}{10 * args.seed_rate}.SG'
 graph_path = 'data/cora_ml/cora_ml_with_seed_IC10_2025_10_28_1530.SG'
 print(f"Loading graph: {graph_path}")
@@ -104,9 +101,7 @@ coverage_np = np.asarray(coverage_list, dtype=np.float32)
 train_loader = DataLoader(TensorDataset(torch.tensor(seed_tensor_np).float(),
                                         torch.tensor(coverage_np).float()),
                          batch_size=batch_size, shuffle=True, drop_last=False)
-# test_loader removed; using full dataset for training-only seed→coverage pipeline
 
-# -- Load or build models (inline of load_model) --
 if args.model:
     forward_model=torch.load("saved_models/"+args.model+"forward_model_1.pth", 
                        map_location=device,
@@ -137,7 +132,6 @@ else:
     forward_model = forward_model.to(device)
     forward_model.train()
 
-    # -- Training loop (inline of train_model) --
     print("Total training epochs:{:}".format(args.epochs))
 
     overall_begin = time.time()
@@ -159,7 +153,6 @@ else:
                 x_hat_res = x_hat.squeeze(0).unsqueeze(-1)  # [N, 1]
 
                 y_hat = forward_model(x_hat_res, adj)  # [1, 1]
-                # Scalar objective: reconstruction + MSE to coverage
                 reproduction_loss = F.binary_cross_entropy(x_hat, x_i.unsqueeze(0), reduction='sum')
                 forward_loss = F.mse_loss(y_hat.squeeze(), y_i)
 
@@ -180,7 +173,7 @@ else:
         "\tReconstruction BCE: {:.4f}".format(total_reconstruction_loss / len(train_loader.dataset)),
         "\tTime: {:.4f}".format(end - begin)
         )
-    # Synchronize CUDA to ensure accurate total time
+
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     overall_end = time.time()
@@ -194,7 +187,7 @@ else:
 def solve(epochs: int = None):
     if epochs is None:
         epochs = args.evaluation
-    # Freeze models
+
     for p in vae_model.parameters():
         p.requires_grad = False
     for p in forward_model.parameters():
@@ -203,7 +196,6 @@ def solve(epochs: int = None):
     encoder = vae_model.Encoder
     decoder = vae_model.Decoder
 
-    # 从最高覆盖样本初始化 z_hat
     idx_top = int(np.argmax(coverage_np))
     x_init = torch.tensor(seed_tensor_np[idx_top]).float().to(device)
     with torch.no_grad():
@@ -211,7 +203,6 @@ def solve(epochs: int = None):
     z_hat = z_hat.detach().clone()
     z_hat.requires_grad = True
 
-    # 只优化 z_hat 的迭代“训练”
     z_optimizer = Adam([z_hat], lr=1e-3)
     l1_coeff = 0.001
     for i in range(epochs):
@@ -219,7 +210,6 @@ def solve(epochs: int = None):
         x_hat_res = x_hat.squeeze(0).unsqueeze(-1)  # [N, 1]
         y_hat = forward_model(x_hat_res, adj)  # [1, 1]
 
-        # 目标：最大化预测覆盖，同时鼓励稀疏（靠近 one-hot）
         loss = -y_hat.squeeze() + l1_coeff * (torch.sum(torch.abs(x_hat)) / x_hat.shape[1])
 
         z_optimizer.zero_grad()
@@ -229,21 +219,17 @@ def solve(epochs: int = None):
         if (i + 1) % 50 == 0 or i == 0 or i == epochs - 1:
             print(f"[Solve] Iter {i+1}: objective={-loss.item():.5f}, pred={y_hat.item():.3f}")
 
-    # 预算与选种：直接从最终 x_hat 取 top-k
     n_nodes = normal_adj.shape[0]
     k_total = max(1, int(round(n_nodes * (args.seed_rate / 100.0))))
     x_hat = decoder(z_hat).detach()
     model_topk = x_hat.topk(k_total, dim=1)
     seeds_model = model_topk.indices[0].cpu().numpy().tolist()
 
-    # 评估影响力
     influence_model = diffusion_evaluation_v2(normal_adj, seeds_model, diffusion=args.diffusion_model)
     print(f"Influence model-only: {influence_model} (k={k_total})")
 
     return seeds_model, influence_model
 
-# Run optimization-based seed selection after training
-# solve_optimize_seeds()
 seeds_model, influence_model = solve()
 
 print("Model-only selection done.")

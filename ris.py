@@ -13,17 +13,13 @@ EPS = 1e-12
 def _nodes_and_inmap(G: pd.DataFrame):
     nodes = np.unique(np.concatenate([G['source'].to_numpy(), G['target'].to_numpy()]))
     #print(nodes)
-    in_map = G.groupby('target')['source'].apply(list).to_dict()# in_map: for each target node, list of source neighbors; reverse adjacency map
+    in_map = G.groupby('target')['source'].apply(list).to_dict()
     return nodes, in_map
 
-# Generate geometric skip steps based on probability p, used to skip neighbor sampling
 def _next_skip(p: float) -> int:
-    # Robust geometric skipping: handle p in [0,1] safely
     if p <= 0.0:
-        # No success events; return large skip to terminate loop
         return 10**9
     if p >= 1.0 - EPS:
-        # Always succeeds; first hit is current index
         return 0
     u = random.random()
     if u < EPS:
@@ -31,7 +27,6 @@ def _next_skip(p: float) -> int:
     denom = np.log(1.0 - p)
     return int(np.floor(np.log(u) / denom))
 
-# Precomputed version: use pre-built nodes and in_map to avoid repeated groupby
 def get_RRS_SUBSIM_WC_precomp(nodes, in_map):
     v = random.choice(list(nodes))
     R, activated = [v], {v}
@@ -165,7 +160,6 @@ def rr_coverage_with_index(seeds, rr_index):
     covered = set()
     for v in seed_ids:
         covered.update(rr_index.get(v, ()))
-    #print(covered)
     return len(covered)
 
 
@@ -188,7 +182,6 @@ def rr_stats(R):
     return {'count': count, 'avg': avg, 'min': min_sz, 'max': max_sz}
 
 def make_ris(data_path, method='SUBSIM', mc=10000, runs=100):
-    # e.g data/cora_ml_mean_IC10.SG
 
     base_name = os.path.basename(data_path)
     dataset_key = base_name.split('_mean_')[0] if '_mean_' in base_name else os.path.splitext(base_name)[0]
@@ -197,13 +190,11 @@ def make_ris(data_path, method='SUBSIM', mc=10000, runs=100):
     with open(data_path, 'rb') as f:
         obj = pickle.load(f)
 
-    # unify adjacency across formats
     if isinstance(obj, dict) and 'adj' in obj:
         adj = obj['adj']
     else:
         adj = obj
 
-    # extract directed edges
     try:
         src, tgt = adj.nonzero()
     except AttributeError:
@@ -219,7 +210,6 @@ def make_ris(data_path, method='SUBSIM', mc=10000, runs=100):
     mc = min(int(adj.shape[0]*0.1), mc) 
     print(f"[{dataset_key}] mc={mc}")
 
-    # compute RR sets (placeholder interface for LT/SIS)
     if method == 'SUBSIM':
         R = ris_subsim(d, adj.shape[0], mc=mc)
     elif method in ('LT', 'SIS'):
@@ -227,7 +217,6 @@ def make_ris(data_path, method='SUBSIM', mc=10000, runs=100):
     else:
         raise ValueError(f"Unknown method '{method}'")
 
-    # parse seed_frac from filename (e.g., IC10 -> 10/1000 = 0.01)
     m = re.search(r'_(?:mean_)?(IC|LT|SIS)(\d+)\.SG$', base_name, re.IGNORECASE)
     if m:
         rate_num = int(m.group(2))
@@ -237,7 +226,6 @@ def make_ris(data_path, method='SUBSIM', mc=10000, runs=100):
         seed_frac_val = 0.05
         print(f"[{dataset_key}] No seed rate tag in filename. Using default seed_frac={seed_frac_val:.3f}")
 
-    # random seeds and RR coverage
     n_nodes = adj.shape[0]
     seed_size = max(1, int(seed_frac_val * n_nodes))
     seed_tensor = np.zeros((runs, n_nodes), dtype=np.int8)
@@ -277,10 +265,8 @@ def make_ris(data_path, method='SUBSIM', mc=10000, runs=100):
             if k in obj and k not in new_sg:
                 new_sg[k] = obj[k]
 
-    # 构造输出目录：当前结果目录 + /数据集名字
     out_dir = os.path.join(base_dir, dataset_key)
     os.makedirs(out_dir, exist_ok=True)
-    # 文件名包含 seed 选取率（如 IC10）
     diff_tag = m.group(1).upper() if m else 'SEED'
     rate_num_tag = int(m.group(2)) if m else int(round(seed_frac_val * 1000))
     out_path = os.path.join(out_dir, f'{dataset_key}_with_seed_{diff_tag}{rate_num_tag}_{timestamp}.SG')
@@ -301,13 +287,11 @@ def make_digg_ris(seed_rate=0.05):
     except FileNotFoundError:
         raise FileNotFoundError("Missing ./data/digg/digg.SG. Run data/digg/build_digg_sg.py first.")
 
-    # Unify adjacency regardless of format (dict with 'adj' or raw matrix)
     if isinstance(obj, dict) and 'adj' in obj:
         adj = obj['adj']
     else:
         adj = obj
 
-    # Ensure adjacency supports nonzero(); convert dense numpy if needed
     try:
         src, tgt = adj.nonzero()
     except AttributeError:
@@ -318,14 +302,11 @@ def make_digg_ris(seed_rate=0.05):
         else:
             raise TypeError("digg.SG must be a SciPy sparse matrix or dict with 'adj' matrix.")
 
-    d = pd.DataFrame({'source': src, 'target': tgt})  # directed edge list
+    d = pd.DataFrame({'source': src, 'target': tgt}) 
     R = ris_subsim(d, adj.shape[0], mc=10000)
-    #print(scores[:10])
-    #print(sum(scores))
     stats = rr_stats(R)
     print(f"RR stats: set size={stats['count']}\nSingle node appearance times:avg={stats['avg']:.3f}, min={stats['min']}, max={stats['max']}")
 
-    # Randomly generate 5% of nodes as seeds; repeat 100 times and record selections
     n_nodes = adj.shape[0]
     seed_size = max(1, int(seed_rate * n_nodes))
     seed_tensor = np.zeros((100, n_nodes), dtype=np.int8)
@@ -337,7 +318,6 @@ def make_digg_ris(seed_rate=0.05):
         seed_tensor[run, chosen] = 1
     elapsed_seed = time.perf_counter() - start_time
 
-    # Compute RR coverage for each seed set
     idx = build_rr_index(R)
     coverage_list = []
     start_time = time.perf_counter()
@@ -353,7 +333,6 @@ def make_digg_ris(seed_rate=0.05):
     #print(f"Seed generation: {elapsed_seed:.3f}s, coverage computation: {elapsed_cov:.3f}s, total: {elapsed_seed + elapsed_cov:.3f}s")
     
     timestamp = datetime.now().strftime('%Y_%m_%d_%H%M')
-    # Package seed_tensor as 'seed' feature together with adj into a new object
     dataset_name = 'digg'
     chosen_path = './data/digg/digg.SG'
     method = 'SUBSIM'
